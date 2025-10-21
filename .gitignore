@@ -8,3 +8,16 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Environment files
+.env
+
+# UV
+uv.lock.bak
+
+# Testing
+.pytest_cache
+.coverage
+
+# Linting
+.ruff_cache
