@@ -6,6 +6,7 @@ import os
 import numpy as np
 import pandas as pd
 from sqlalchemy import create_engine, text
+from typing import cast
 
 load_dotenv()
 
@@ -85,12 +86,14 @@ def smooth(df: pd.DataFrame, method: str = "ema", span: int = 5) -> pd.DataFrame
     return out.dropna(how="all")
 
 def df_to_payload(df: pd.DataFrame) -> dict:
-    """Convert DF with DatetimeIndex to the expected JSON payload."""
+    idx = cast(pd.DatetimeIndex, df.index)          # tell Pylance the real type
+    times = [ts.isoformat() for ts in idx.to_pydatetime()]
     return {
-        "_time": [ts.isoformat() for ts in df.index.to_pydatetime()],
+        "_time": times,
         "stress_cycle": df["stress_cycle"].astype(float).tolist(),
         "pos_na": df["pos_na"].astype(float).tolist(),
     }
+
 
 @app.get("/bridge-data/")
 def bridge_data(
