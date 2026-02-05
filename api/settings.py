@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from json import load
 import os
 import re
 from functools import lru_cache
@@ -17,7 +16,7 @@ class Settings(BaseSettings):
     db_url: str = os.getenv("DB_URL", "sqlite:///./data/midspan_data.db")
     csv_path: str = os.getenv("CSV_PATH", "./data/midspan_data.csv")
     table_name: str = os.getenv("TABLE_NAME", "midspan_data")
-    mode_db: str =  os.getenv("MODE_DB", "replace")
+    mode_db: str = os.getenv("MODE_DB", "replace")
 
     # debug toggle for endpoint
     enable_debug_endpoint: bool = False
@@ -46,7 +45,7 @@ class Settings(BaseSettings):
     def resolved_db_path(self) -> Path | None:
         if not self.is_sqlite:
             return None
-        raw = self.db_url[len("sqlite:///"):]  # keep "///" semantics
+        raw = self.db_url[len("sqlite:///") :]  # keep "///" semantics
         p = Path(raw)
         if not p.is_absolute():
             p = (self.project_root / p).resolve()
