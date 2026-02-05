@@ -1,50 +1,35 @@
 services:
-  db:
-    image: postgres:13
-    container_name: irmos_db
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    volumes:
-      - db_data:/var/lib/postgresql/data
-
-  loader:
-    build: ./api
-    depends_on:
-      db:
-        condition: service_healthy
-    env_file: .env
-    volumes:
-      - ./data:/data:ro
-    command: >
-      python /data/load_csv_to_db.py
-      --csv /data/midspan_data.csv
-      --db ${DB_URL}
-      --table midspan_data
-      --mode replace
   api:
     build:
-      context: ./api
+      context: .
+      dockerfile: Dockerfile
     container_name: irmos_api
     restart: unless-stopped
     env_file: .env
-    depends_on:
-      db:
-        condition: service_healthy
+    environment:
+      DB_URL: sqlite:////data/midspan_data.db
+      CSV_PATH: /data/midspan_data.csv
     ports:
       - "8000:8000"
     volumes:
       - ./data:/data
+    working_dir: /app/api
+    command: uvicorn app:app --host 0.0.0.0 --port 8000 --workers 1
+
+  loader:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DB_URL: sqlite:////data/midspan_data.db
+      CSV_PATH: /data/midspan_data.csv
+      TABLE_NAME: ${TABLE_NAME:-midspan_data}
+      MODE_DB: ${MODE_DB:-replace}
+    volumes:
+      - ./data:/data
+    working_dir: /app
     command: >
-      uvicorn app.app: app
-      --host 0.0.0.0 -- port 8000
-      --workers 1
+      python data/load_csv_to_db.py
+    restart: "no"
+    profiles: ["init"]

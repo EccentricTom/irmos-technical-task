@@ -4,41 +4,53 @@ from fastapi import FastAPI, Query, HTTPException
 from dotenv import load_dotenv
 import os
 import numpy as np
+from pathlib import Path
 import pandas as pd
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, inspect
 from typing import cast
-
-load_dotenv()
+from settings import get_settings
 
 # Initialize FastAPI app
 app = FastAPI(title="Bridge Health API", version="0.1")
 
 # ---- DB ----
 def _engine():
-    db_url = os.getenv("DB_URL")
-    if not db_url:
-        raise RuntimeError("DB_URL is not set")
-    return create_engine(db_url, future=True, pool_pre_ping=True)
+    s = get_settings()
+    if s.is_sqlite:
+        db_path = s.resolved_db_path
+        if db_path is None or not db_path.exists():
+            raise RuntimeError(f"SQLite file not found: {db_path}")
 
+    return create_engine(
+        s.resolved_db_url,
+        future=True,
+        pool_pre_ping=True,
+        connect_args={"check_same_thread": False},
+    )
 def retrieve_db_data() -> pd.DataFrame:
     """Read raw rows from DB and return a DataFrame with a UTC DatetimeIndex."""
+    s = get_settings()
     eng = _engine()
-    with eng.connect() as conn:
-        df = pd.read_sql(
-            text("SELECT time, stress_cycle, pos_na FROM midspan_data ORDER BY time"),
-            conn,
-            parse_dates=["time"],
+    try:
+        query = text(
+            f"SELECT time, stress_cycle, pos_na "
+            f"FROM {s.table_name} "
+            f"ORDER BY time"
         )
-    if df.empty:
-        return df
-    # Ensure timezone-aware UTC index
+        with eng.connect() as conn:
+            df = pd.read_sql(query, conn, parse_dates=["time"])
+        if df.empty:
+            return df
+    except Exception as e:
+        schemas = inspect(eng).get_schema_names()
+        msg = f"Could not connect/read DB. Schemas: {schemas}"
+        raise HTTPException(status_code=500, detail=f"Database error: {e}\n\n{msg}")
+
     df["time"] = pd.to_datetime(df["time"], utc=True)
     df = df.set_index("time").sort_index()
-    # Basic numeric hygiene
     df["stress_cycle"] = pd.to_numeric(df["stress_cycle"], errors="coerce")
     df["pos_na"] = pd.to_numeric(df["pos_na"], errors="coerce")
-    df = df.dropna(subset=["stress_cycle", "pos_na"])
-    return df
+    return df.dropna(subset=["stress_cycle", "pos_na"])
 
 # ---- Processing helpers (DF in -> DF out) ----
 def hampel(series: pd.Series, k: int = 7, nsigma: float = 3.0) -> pd.Series:
@@ -114,3 +126,23 @@ def bridge_data(
     df_down = downsample_time(df_clean, freq=freq)
     df_smooth = smooth(df_down, method=smooth_method, span=span)
     return df_to_payload(df_smooth)
+
+@app.get("/debug/config")
+def debug_config():
+    """
+    Dev-only endpoint: confirms resolved paths and DB visibility.
+    Enable with ENABLE_DEBUG_ENDPOINT=true in .env
+    """
+    s = get_settings()
+    if not s.enable_debug_endpoint:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    db_exists = s.resolved_db_path.exists() if s.resolved_db_path else None
+
+    return {
+        "project_root": str(s.project_root),
+        "db_url_raw": s.db_url,
+        "db_url_resolved": s.resolved_db_url,
+        "db_path_exists": db_exists,
+        "table_name": s.table_name,
+    }

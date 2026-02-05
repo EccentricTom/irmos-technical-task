@@ -1,62 +1,49 @@
 # load the contents of "midspan_data.csv" into the "midspan_data" table in a postgresql database
-import argparse
-
 import pandas as pd
 from sqlalchemy import (
     create_engine,
     text,
 )
+from sqlalchemy.engine import Engine
+from dotenv import load_dotenv
+import os
 
+load_dotenv()
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--csv", required=True)
-    ap.add_argument(
-        "--db", required=True
-    )  # e.g. postgresql+psycopg://user:pw@db:5432/irmosdb
-    ap.add_argument("--table", default="midspan_data")
-    ap.add_argument("--mode", choices=["replace", "append"], default="replace")
-    args = ap.parse_args()
-
-    # Read + normalize
-    df = pd.read_csv(args.csv).rename(
-        columns={
-            "time": "time",
-            "Fat_cycle_bot": "stress_cycle",
-            "Pos_na": "pos_na",
-        }
-    )
+def normalise_df(csv_path:str) -> pd.DataFrame:
+    df = pd.read_csv(csv_path)
+    df = df.rename(columns= {
+        "time": "time",
+        "Fat_cycle_bot": "stress_cycle",
+        "Pos_na": "pos_na"
+    })
     df["time"] = pd.to_datetime(df["time"], utc=True, errors="coerce")
     df["stress_cycle"] = pd.to_numeric(df["stress_cycle"], errors="coerce")
     df["pos_na"] = pd.to_numeric(df["pos_na"], errors="coerce")
     df = df.dropna(subset=["time"]).sort_values("time")
+    return df
 
-    engine = create_engine(args.db, future=True)
-
-    ddl = f"""
-    CREATE TABLE IF NOT EXISTS {args.table} (
-      time TIMESTAMPTZ NOT NULL,
-      stress_cycle DOUBLE PRECISION,
-      pos_na DOUBLE PRECISION
-    );"""
-    idx = f"CREATE INDEX IF NOT EXISTS idx_{args.table}_time ON {args.table} (time);"
-
+def write_df(df:pd.DataFrame, engine:Engine, table, mode):
+    dialect = engine.dialect.name
     with engine.begin() as conn:
-        conn.execute(text(ddl))
-        if args.mode == "replace":
-            conn.execute(text(f"TRUNCATE TABLE {args.table};"))
-        # No dtype= → no Pylance error
-        df.to_sql(
-            args.table,
-            conn,
-            if_exists="append",
-            index=False,
-            method="multi",
-            chunksize=10_000,
-        )
-        conn.execute(text(idx))
+        if dialect == "sqlite":
+            tosql_mode = "replace" if mode == "replace" else "append"
+            df.to_sql(table, conn, if_exists=tosql_mode, index=False, method="multi", chunksize=10000)
+            conn.execute(text(f"CREATE INDEX IF NOT EXISTS idx{table}_time ON {table}(time);"))
+        else:
+            pass
 
-    print(f"Loaded {len(df)} rows into '{args.table}' ({args.mode}).")
+def main():
+
+    csv_path = os.getenv("CSV_PATH")
+    db = os.getenv("DB_URL")
+    table = os.getenv("TABLE_NAME")
+    mode = os.getenv("MODE_DB")
+
+    df = normalise_df(csv_path)
+    engine = create_engine(db, future=True, pool_pre_ping=True)
+
+    write_df(df, engine, table, mode)
 
 
 if __name__ == "__main__":
